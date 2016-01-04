@@ -7,22 +7,30 @@ using System.Text;
 using ESRI.ArcGIS.esriSystem;
 using ESRI.ArcGIS.Geometry;
 
+using ESRI.ArcGIS.Carto;
+using ESRI.ArcGIS.Display;
+
 namespace ConsoleRaster
 {
     class Program
     {
         static void Main(string[] args)
         {
+            //运行环境初始化
             ESRI.ArcGIS.RuntimeManager.Bind(ESRI.ArcGIS.ProductCode.EngineOrDesktop);
             IAoInitialize aoinitialize = new AoInitializeClass();
             esriLicenseStatus status = aoinitialize.Initialize(esriLicenseProductCode.esriLicenseProductCodeStandard);
+
             string path = System.Environment.CurrentDirectory;
             string name = "result.tif";
+
+
             IWorkspaceFactory workspaceFactory = new RasterWorkspaceFactoryClass();
             IRasterWorkspace rasterWorkspace = (IRasterWorkspace)(workspaceFactory.OpenFromFile(path, 0));
-
-            IRasterDataset pRasterDataset = OpenRasterFileAsGeoDatset(path, name) as IRasterDataset;
+            IRasterDataset pRasterDataset = rasterWorkspace.OpenRasterDataset(name);
+            //创建栅格瓦片
             CreateTilesFromRasterDataset(pRasterDataset, rasterWorkspace as IWorkspace, 500, 500);
+            //修改栅格的值
             ChangeRasterValue(pRasterDataset as IRasterDataset2);
             aoinitialize.Shutdown();
 
@@ -150,9 +158,9 @@ public static void CreateTilesFromRasterDataset(IRasterDataset pRasterDataset, I
     IEnvelope pTileExtent = new EnvelopeClass();
     ISaveAs pSaveAs = null;
 
-    for (int i = 0; i < xTileCount;i++ )
+    for (int i = 0; i < xTileCount; i++)
     {
-        for (int j = 0; j < yTileCount;j++ )
+        for (int j = 0; j < yTileCount; j++)
         {
             pRasterProps = (IRasterProps)pRasterDataset.CreateDefaultRaster();
 
@@ -175,5 +183,120 @@ public static void CreateTilesFromRasterDataset(IRasterDataset pRasterDataset, I
 
 
 }
+        /// <summary>
+        /// 波段计算和金字塔构建
+        /// </summary>
+        /// <param name="pRasterDataset"></param>
+        public static void CalculateStatsAndPyramids(IRasterDataset pRasterDataset){
+
+            IRasterBandCollection pBandColl=(IRasterBandCollection)pRasterDataset;
+            //波段统计
+            for (int i=0;i<pBandColl.Count;i++)
+            {
+
+                IRasterBand pRasterBand=pBandColl.Item(i);
+                pRasterBand.ComputeStatsAndHist();
+                //IRasterStatistics pRasterStatistics= pRasterBand.Statistics;
+                //double Maximum=pRasterStatistics.Maximum;
+                //IRasterHistogram pRasterHistogram=pRasterBand.Histogram;
+               
+            }
+            IRasterPyramid pRasterPyramids=(IRasterPyramid)pRasterDataset;
+            if (pRasterPyramids.Present==false)
+            {
+                pRasterPyramids.Create();
+            }
+        }
+
+        public static IRasterRenderer ClassifyRenderer(ESRI.ArcGIS.Geodatabase.IRasterDataset pRasterDataset){
+
+            try
+            {
+                //create the classify render:创建渲染器
+                IRasterClassifyColorRampRenderer pClassifyRenderer=new RasterClassifyColorRampRendererClass();
+                IRasterRenderer pRasterRenderer=(IRasterRenderer)pClassifyRenderer;
+                IRaster pRaster=pRasterDataset.CreateDefaultRaster();
+                pRasterRenderer.Raster=pRaster;
+                pClassifyRenderer.ClassCount=10;
+                pRasterRenderer.Update();
+                
+                //创建颜色
+                IRgbColor pFromColor=new RgbColorClass();
+                pFromColor.Red=255;
+                pFromColor.Green=0;
+                pFromColor.Blue=0;
+                IRgbColor pToColor=new RgbColorClass();
+                pToColor.Red=0;
+                pToColor.Green=255;
+                pToColor.Blue=255;
+
+                //set the color ramp for the symbology:生成色带
+                IAlgorithmicColorRamp pRamp=new AlgorithmicColorRampClass();
+                pRamp.Size=10;
+                pRamp.FromColor=pFromColor;
+                pRamp.ToColor=pToColor;
+                bool pBoolColorRamp;
+                pRamp.CreateRamp(out pBoolColorRamp);
+                //create the symbol for the classes.:创建符号
+                IFillSymbol pFillSymbol=new SimpleFillSymbolClass();
+                for (int i=0;i<pClassifyRenderer.ClassCount;i++){
+
+                    pFillSymbol.Color=pRamp.get_Color(i);
+                    pClassifyRenderer.set_Symbol(i,(ISymbol)pFillSymbol);
+                    pClassifyRenderer.set_Label(i,Convert.ToString(i));
+
+                }
+                return pRasterRenderer;
+
+            }
+            catch (System.Exception ex)
+            {
+            	System.Diagnostics.Debug.WriteLine(ex.Message);
+                return null;
+            }
+        }
+        public static IRasterRenderer StretchRender(IRasterDataset pRasterDataset){
+
+
+            try
+            {
+                //Define the from and to colors for the color ramp
+                IRgbColor pFromColor=new RgbColorClass();
+                pFromColor.Red=255;
+                pFromColor.Green=0;
+                pFromColor.Blue=0;
+                IRgbColor pToColor=new RgbColorClass();
+                pToColor.Red=0;
+                pToColor.Green=255;
+                pToColor.Blue=0;
+
+                IAlgorithmicColorRamp pRamp=new AlgorithmicColorRampClass();
+                pRamp.Size=10;
+                pRamp.FromColor=pFromColor;
+                pRamp.ToColor=pToColor;
+                bool createColorRamp;
+                pRamp.CreateRamp(out createColorRamp);
+                //create a stretch renderer
+                IRasterStretchColorRampRenderer pStrechRenderer=new RasterStretchColorRampRendererClass();
+                IRasterRenderer pRasterRenderer=(IRasterRenderer)pStrechRenderer;
+                //set the renderer properties
+                IRaster pRaster =pRasterDataset.CreateDefaultRaster();
+                pRasterRenderer.Raster=pRaster;
+                pRasterRenderer.Update();
+                //
+                pStrechRenderer.BandIndex=0;
+                pStrechRenderer.ColorRamp=pRamp;
+                IRasterStretch  pStretchType=(IRasterStretch)pRasterRenderer;
+                pStretchType.StretchType=esriRasterStretchTypesEnum.esriRasterStretch_StandardDeviations;
+                pStretchType.StandardDeviationsParam=2;
+                return pRasterRenderer;
+
+            }
+            catch (System.Exception ex)
+            {
+            	System.Diagnostics.Debug.WriteLine(ex.Message);
+                return null;
+            }
+        }
     }
 }
